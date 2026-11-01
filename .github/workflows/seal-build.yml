@@ -1,0 +1,60 @@
+name: seal-build
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  pack:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          path: src
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.21'
+      - name: Build
+        working-directory: src
+        env:
+          GO111MODULE: 'off'
+        run: go build -v .
+      - name: Pack module zip
+        run: |
+          set -eo pipefail
+          # Pack from a copy without the seal-build workflow (upstream ships no .github).
+          mkdir -p modsrc build_output
+          rsync -a --exclude .git --exclude .github src/ modsrc/
+          mkdir helper && cd helper
+          cat > main.go <<'EOF'
+          package main
+
+          import (
+          "log"
+          "os"
+
+          "golang.org/x/mod/module"
+          "golang.org/x/mod/zip"
+          )
+
+          func main() {
+          m := module.Version{Path: os.Args[1], Version: os.Args[2]}
+          f, err := os.Create(os.Args[4])
+          if err != nil {
+              log.Fatal(err)
+          }
+          defer f.Close()
+          if err := zip.CreateFromDir(f, m, os.Args[3]); err != nil {
+              log.Fatal(err)
+          }
+          log.Printf("created module zip: %s", os.Args[4])
+          }
+          EOF
+          go mod init example.com/helper
+          go get golang.org/x/mod@v0.14.0
+          go run . github.com/Masterminds/goutils v1.1.0 "$GITHUB_WORKSPACE/modsrc" "$GITHUB_WORKSPACE/build_output/v1.1.0.zip"
+          unzip -l "$GITHUB_WORKSPACE/build_output/v1.1.0.zip"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: module-zip
+          path: build_output/v1.1.0.zip
